@@ -1,10 +1,10 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 import { useDashboardData } from '@/hooks/useDashboardData';
 import type { Rechnung } from '@/types/app';
 import { LivingAppsService } from '@/services/livingAppsService';
 import { formatDate } from '@/lib/formatters';
 import { Skeleton } from '@/components/ui/skeleton';
-import { AlertCircle, Plus, Euro, Clock, CheckCircle2, TrendingUp, Pencil, Trash2, FileText } from 'lucide-react';
+import { AlertCircle, Plus, Euro, Clock, CheckCircle2, TrendingUp, Pencil, Trash2, FileText, Camera, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { StatCard } from '@/components/StatCard';
@@ -12,6 +12,7 @@ import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { RechnungDialog } from '@/components/dialogs/RechnungDialog';
 import { AI_PHOTO_SCAN } from '@/config/ai-features';
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell } from 'recharts';
+import { extractFromPhoto, fileToDataUri } from '@/lib/ai';
 
 const KATEGORIE_LABELS: Record<string, string> = {
   buero: 'Büromaterial',
@@ -52,6 +53,10 @@ export default function DashboardOverview() {
   const [editRecord, setEditRecord] = useState<Rechnung | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Rechnung | null>(null);
   const [activeFilter, setActiveFilter] = useState<'all' | 'offen' | 'bezahlt'>('all');
+  const [scanLoading, setScanLoading] = useState(false);
+  const [scanError, setScanError] = useState<string | null>(null);
+  const [prefillValues, setPrefillValues] = useState<Record<string, unknown> | undefined>(undefined);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // KPI calculations
   const stats = useMemo(() => {
@@ -82,6 +87,48 @@ export default function DashboardOverview() {
     return rechnung;
   }, [rechnung, activeFilter]);
 
+  const handlePhotoScan = async (file: File) => {
+    setScanLoading(true);
+    setScanError(null);
+    try {
+      const uri = await fileToDataUri(file);
+      const extracted = await extractFromPhoto<{
+        rechnungsnummer: string | null;
+        rechnungsdatum: string | null;
+        betrag: number | null;
+        lieferant: string | null;
+        kategorie: string | null;
+        notizen: string | null;
+      }>(uri, JSON.stringify({
+        rechnungsnummer: 'string — invoice/receipt number',
+        rechnungsdatum: 'string — invoice date as YYYY-MM-DD or null',
+        betrag: 'number — total amount in EUR (numeric only, no currency symbol)',
+        lieferant: 'string — supplier/issuer name',
+        kategorie: 'string — one of: buero, it_software, reise, marketing, miete, versicherung, sonstiges',
+        notizen: 'string — any additional notes or null',
+      }));
+
+      // Map kategorie key to {key, label} lookup object
+      const katKey = extracted.kategorie && Object.keys(KATEGORIE_LABELS).includes(extracted.kategorie)
+        ? extracted.kategorie : 'sonstiges';
+
+      setPrefillValues({
+        rechnungsnummer: extracted.rechnungsnummer ?? undefined,
+        rechnungsdatum: extracted.rechnungsdatum ?? undefined,
+        betrag: extracted.betrag ?? undefined,
+        lieferant: extracted.lieferant ?? undefined,
+        kategorie: katKey,
+        notizen: extracted.notizen ?? undefined,
+      });
+      setEditRecord(null);
+      setDialogOpen(true);
+    } catch {
+      setScanError('Foto konnte nicht ausgelesen werden. Bitte erneut versuchen.');
+    } finally {
+      setScanLoading(false);
+    }
+  };
+
   const handleDelete = async () => {
     if (!deleteTarget) return;
     await LivingAppsService.deleteRechnungEntry(deleteTarget.record_id);
@@ -101,12 +148,51 @@ export default function DashboardOverview() {
           <p className="text-sm text-muted-foreground mt-0.5">{rechnung.length} Rechnungen insgesamt</p>
         </div>
         <Button
-          onClick={() => { setEditRecord(null); setDialogOpen(true); }}
+          onClick={() => { setEditRecord(null); setPrefillValues(undefined); setDialogOpen(true); }}
           className="gap-2"
         >
           <Plus size={16} />
           Neue Rechnung
         </Button>
+      </div>
+
+      {/* Photo Scan Hero */}
+      <div>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*,application/pdf"
+          capture="environment"
+          className="hidden"
+          onChange={e => {
+            const file = e.target.files?.[0];
+            if (file) handlePhotoScan(file);
+            e.target.value = '';
+          }}
+        />
+        <button
+          onClick={() => fileInputRef.current?.click()}
+          disabled={scanLoading}
+          className="w-full group relative overflow-hidden rounded-2xl border-2 border-dashed border-primary/30 bg-primary/5 hover:bg-primary/10 hover:border-primary/60 transition-all duration-200 p-8 flex flex-col items-center justify-center gap-3 disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          <div className={`w-16 h-16 rounded-2xl bg-primary/10 group-hover:bg-primary/20 flex items-center justify-center transition-all duration-200 ${scanLoading ? 'animate-pulse' : ''}`}>
+            {scanLoading
+              ? <Loader2 size={30} className="text-primary animate-spin" />
+              : <Camera size={30} className="text-primary" />
+            }
+          </div>
+          <div className="text-center">
+            <p className="text-base font-semibold text-foreground">
+              {scanLoading ? 'Rechnung wird ausgelesen…' : 'Rechnung fotografieren oder hochladen'}
+            </p>
+            <p className="text-sm text-muted-foreground mt-0.5">
+              {scanLoading ? 'KI liest die Daten aus — einen Moment…' : 'Foto, Screenshot oder PDF — KI füllt das Formular automatisch aus'}
+            </p>
+          </div>
+        </button>
+        {scanError && (
+          <p className="text-sm text-destructive mt-2 text-center">{scanError}</p>
+        )}
       </div>
 
       {/* KPI Cards */}
@@ -252,7 +338,7 @@ export default function DashboardOverview() {
                     {/* Actions */}
                     <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                       <button
-                        onClick={() => { setEditRecord(r); setDialogOpen(true); }}
+                        onClick={() => { setEditRecord(r); setPrefillValues(undefined); setDialogOpen(true); }}
                         className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
                       >
                         <Pencil size={14} />
@@ -275,7 +361,7 @@ export default function DashboardOverview() {
       {/* Dialogs */}
       <RechnungDialog
         open={dialogOpen}
-        onClose={() => { setDialogOpen(false); setEditRecord(null); }}
+        onClose={() => { setDialogOpen(false); setEditRecord(null); setPrefillValues(undefined); }}
         onSubmit={async (fields) => {
           if (editRecord) {
             await LivingAppsService.updateRechnungEntry(editRecord.record_id, fields);
@@ -284,7 +370,7 @@ export default function DashboardOverview() {
           }
           fetchAll();
         }}
-        defaultValues={editRecord?.fields}
+        defaultValues={editRecord ? editRecord.fields : prefillValues}
         enablePhotoScan={AI_PHOTO_SCAN['Rechnung']}
       />
 
