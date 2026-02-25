@@ -4,7 +4,7 @@ import type { Rechnung } from '@/types/app';
 import { LivingAppsService } from '@/services/livingAppsService';
 import { formatDate } from '@/lib/formatters';
 import { Skeleton } from '@/components/ui/skeleton';
-import { AlertCircle, Plus, Euro, Clock, CheckCircle2, TrendingUp, Pencil, Trash2, FileText, Camera, Loader2 } from 'lucide-react';
+import { AlertCircle, Plus, Euro, Clock, CheckCircle2, TrendingUp, Pencil, Trash2, FileText, Camera, Loader2, X, ExternalLink, Download } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { StatCard } from '@/components/StatCard';
@@ -53,6 +53,7 @@ export default function DashboardOverview() {
   const [editRecord, setEditRecord] = useState<Rechnung | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<Rechnung | null>(null);
   const [activeFilter, setActiveFilter] = useState<'all' | 'offen' | 'bezahlt'>('all');
+  const [detailRecord, setDetailRecord] = useState<Rechnung | null>(null);
   const [scanLoading, setScanLoading] = useState(false);
   const [scanError, setScanError] = useState<string | null>(null);
   const [prefillValues, setPrefillValues] = useState<Record<string, unknown> | undefined>(undefined);
@@ -298,7 +299,8 @@ export default function DashboardOverview() {
                 return (
                   <div
                     key={r.record_id}
-                    className="flex items-center gap-4 px-5 py-3.5 hover:bg-accent/40 transition-colors group"
+                    className="flex items-center gap-4 px-5 py-3.5 hover:bg-accent/40 transition-colors group cursor-pointer"
+                    onClick={() => setDetailRecord(r)}
                   >
                     {/* Category Color Dot */}
                     <div
@@ -336,7 +338,7 @@ export default function DashboardOverview() {
                     </div>
 
                     {/* Actions */}
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" onClick={e => e.stopPropagation()}>
                       <button
                         onClick={() => { setEditRecord(r); setPrefillValues(undefined); setDialogOpen(true); }}
                         className="p-1.5 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
@@ -357,6 +359,135 @@ export default function DashboardOverview() {
           </div>
         </div>
       </div>
+
+      {/* Detail Side Panel */}
+      {detailRecord && (
+        <div className="fixed inset-0 z-50 flex">
+          {/* Backdrop */}
+          <div
+            className="flex-1 bg-black/40 backdrop-blur-sm"
+            onClick={() => setDetailRecord(null)}
+          />
+          {/* Panel */}
+          <div className="w-full max-w-lg bg-background border-l border-border shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-right duration-200">
+            {/* Panel Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-border shrink-0">
+              <div>
+                <h2 className="text-base font-semibold text-foreground">
+                  {detailRecord.fields.lieferant || detailRecord.fields.rechnungsnummer || 'Rechnung'}
+                </h2>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  {KATEGORIE_LABELS[getKategorie(detailRecord)] ?? getKategorie(detailRecord)}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => { setEditRecord(detailRecord); setPrefillValues(undefined); setDetailRecord(null); setDialogOpen(true); }}
+                  className="p-2 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                  title="Bearbeiten"
+                >
+                  <Pencil size={15} />
+                </button>
+                <button
+                  onClick={() => setDetailRecord(null)}
+                  className="p-2 rounded-lg hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  <X size={15} />
+                </button>
+              </div>
+            </div>
+
+            {/* Panel Body */}
+            <div className="flex-1 overflow-y-auto">
+              {/* Info Fields */}
+              <div className="px-6 py-5 space-y-4">
+                <DetailRow label="Rechnungsnummer" value={detailRecord.fields.rechnungsnummer} />
+                <DetailRow label="Rechnungsdatum" value={detailRecord.fields.rechnungsdatum ? formatDate(detailRecord.fields.rechnungsdatum) : undefined} />
+                <DetailRow label="Zahlungsdatum" value={detailRecord.fields.zahlungsdatum ? formatDate(detailRecord.fields.zahlungsdatum) : undefined} />
+                <DetailRow label="Lieferant" value={detailRecord.fields.lieferant} />
+                <DetailRow label="Betrag" value={detailRecord.fields.betrag != null ? formatEur(detailRecord.fields.betrag) : undefined} highlight />
+                <div className="flex items-center justify-between py-2 border-b border-border/50">
+                  <span className="text-xs text-muted-foreground font-medium">Status</span>
+                  <Badge
+                    className={`text-xs ${detailRecord.fields.bezahlt ? 'bg-emerald-500/15 text-emerald-700 border-emerald-200' : 'bg-amber-500/15 text-amber-700 border-amber-200'}`}
+                  >
+                    {detailRecord.fields.bezahlt ? 'Bezahlt' : 'Offen'}
+                  </Badge>
+                </div>
+                {detailRecord.fields.notizen && (
+                  <div className="py-2">
+                    <span className="text-xs text-muted-foreground font-medium block mb-1">Notizen</span>
+                    <p className="text-sm text-foreground whitespace-pre-wrap">{detailRecord.fields.notizen}</p>
+                  </div>
+                )}
+              </div>
+
+              {/* PDF / File Viewer */}
+              {detailRecord.fields.rechnungsdatei ? (
+                <div className="px-6 pb-6">
+                  <div className="rounded-xl border border-border overflow-hidden">
+                    <div className="flex items-center justify-between px-4 py-2.5 bg-muted/50 border-b border-border">
+                      <span className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                        <FileText size={13} className="text-primary" />
+                        Rechnungsdatei
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <a
+                          href={detailRecord.fields.rechnungsdatei}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center gap-1 text-xs text-primary hover:underline"
+                          onClick={e => e.stopPropagation()}
+                        >
+                          <ExternalLink size={12} />
+                          Öffnen
+                        </a>
+                        <a
+                          href={detailRecord.fields.rechnungsdatei}
+                          download
+                          className="flex items-center gap-1 text-xs text-primary hover:underline"
+                          onClick={e => e.stopPropagation()}
+                        >
+                          <Download size={12} />
+                          Download
+                        </a>
+                      </div>
+                    </div>
+                    {/* Embedded PDF or image */}
+                    {detailRecord.fields.rechnungsdatei.match(/\.(pdf)(\?|$)/i) ? (
+                      <iframe
+                        src={detailRecord.fields.rechnungsdatei}
+                        className="w-full h-[480px] bg-white"
+                        title="Rechnungs-PDF"
+                      />
+                    ) : detailRecord.fields.rechnungsdatei.match(/\.(png|jpe?g|gif|webp|bmp)(\?|$)/i) ? (
+                      <img
+                        src={detailRecord.fields.rechnungsdatei}
+                        alt="Rechnungsdatei"
+                        className="w-full object-contain max-h-[480px] bg-muted/30"
+                      />
+                    ) : (
+                      /* Unknown type — try iframe, falls back gracefully */
+                      <iframe
+                        src={detailRecord.fields.rechnungsdatei}
+                        className="w-full h-[480px] bg-white"
+                        title="Rechnungsdatei"
+                      />
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="px-6 pb-6">
+                  <div className="rounded-xl border border-dashed border-border p-6 flex flex-col items-center gap-2 text-muted-foreground">
+                    <FileText size={28} className="opacity-30" />
+                    <p className="text-sm">Keine Datei hinterlegt</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Dialogs */}
       <RechnungDialog
@@ -381,6 +512,16 @@ export default function DashboardOverview() {
         onConfirm={handleDelete}
         onClose={() => setDeleteTarget(null)}
       />
+    </div>
+  );
+}
+
+function DetailRow({ label, value, highlight }: { label: string; value?: string | null; highlight?: boolean }) {
+  if (!value) return null;
+  return (
+    <div className="flex items-center justify-between py-2 border-b border-border/50">
+      <span className="text-xs text-muted-foreground font-medium">{label}</span>
+      <span className={`text-sm ${highlight ? 'font-bold text-foreground' : 'text-foreground'}`}>{value}</span>
     </div>
   );
 }
